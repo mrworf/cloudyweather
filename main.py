@@ -9,9 +9,12 @@ import datetime
 from array import array
 from struct import unpack
 
+from flask import Flask, jsonify, abort
+
 class Oregon:
   def __init__(self):
     self.lastEntry = {}
+    self.sensors = {}
 
   def processTempHumid(self, data):
     # Temp, Humidity, Flags, Battery & Signal
@@ -25,7 +28,8 @@ class Oregon:
       "log" : "%.1fC, %d%% (Signal %d, Battery %d)" % (temp, humidity, signal, battery),
       "table" : "TH_DATA",
       "fields" : "TEMPERATURE,HUMIDITY,SIGNAL,BATTERY",
-      "values" : "%f,%d,%d,%d" % (temp, humidity, signal, battery)
+      "values" : "%f,%d,%d,%d" % (temp, humidity, signal, battery),
+      "data" : { "temperature" : temp, "humidity" : humidity, "signal" : signal, "battery" : battery}
     }
 
   def processUV(self, data):
@@ -40,7 +44,8 @@ class Oregon:
       "log" : "%d UV, %.1fC (Signal %d, Battery %d)" % (uv, temp, signal, battery),
       "table" : "UV_DATA",
       "fields" : "UV,TEMPERATURE,SIGNAL,BATTERY",
-      "values" : "%d,%f,%d,%d" % (uv, temp, signal, battery)
+      "values" : "%d,%f,%d,%d" % (uv, temp, signal, battery),
+      "data" : { "temperature" : temp, "uv" : uv, "signal" : signal, "battery" : battery}
     }
 
   def processWind(self, data):
@@ -58,8 +63,20 @@ class Oregon:
       "log" : "%d direction, %d m/s (%d avg) (Signal %d, Battery %d)" % (wind, speed, avg, signal, battery),
       "table" : "WIND_DATA",
       "fields" : "DIRECTION,AVERAGE,INSTANT,SIGNAL,BATTERY",
-      "values" : "%d,%d,%d" % (wind, avg, speed, signal, battery)
+      "values" : "%d,%d,%d" % (wind, avg, speed, signal, battery),
+      "data" : { "wind" : wind, "average" : avg, "speed" : speed, "signal" : signal, "battery" : battery}
     }
+
+  def getSensors(self):
+    result = []
+    for s in self.sensors:
+      result.append(s)
+    return result
+
+  def getSensor(self, sensor):
+    if sensor in self.sensors:
+      return self.sensors[sensor]
+    return {}
 
   def processEvent(self, db, data):
     stype = ord(data[0])
@@ -93,13 +110,14 @@ class Oregon:
     if result is None:
       return False
 
-    print "%s: %s" % (name, result["log"])
+    print "(%3d:%5d) %s" % (stype, sensor, result["log"])
     content = repr(result)
 
     if sensor in self.lastEntry and self.lastEntry[sensor] == content:
       return True
 
     self.lastEntry[sensor] = content
+    self.sensors[sensor] = result['data']
 
     try:
       statement = 'INSERT INTO %s (TS,SENSOR,%s) VALUES (%d,%d,%s)' % (result["table"], result["fields"], int(time.time()), sensor, result["values"])
@@ -109,10 +127,55 @@ class Oregon:
       print e
     return True
 
+class rfxcomMonitor(threading.Thread):
+  def __init__(self, port, dbfile):
+    threading.Thread.__init__(self)
+    self.daemon = True
+    self.port = port
+    self.dbfile = dbfile
+
+  def run(self):
+    # Open DB in the correct context
+    self.db = sqlite3.connect(self.dbfile)
+
+    # configure the serial connections (the parameters differs on the device you are connecting to)
+    ser = serial.Serial(
+      port=self.port,
+      baudrate=38400,
+      parity=serial.PARITY_NONE,
+      stopbits=serial.STOPBITS_ONE,
+      bytesize=serial.EIGHTBITS,
+      timeout=1,
+    )
+
+    ser.isOpen()
+    oregon = Oregon()
+
+    # Try reading a packet
+    while True:
+      while True:
+        size = ser.read(1)
+        if len(size) == 1:
+          break
+
+      size = int(size.encode('hex'), 16)
+      if size == 0:
+        continue
+
+      #print ("%02d bytes:" % size),
+      data = ser.read(size)
+      if len(data) != size:
+        print "Fail, got %d bytes, expected %d!" % (len(data), size)
+      else:
+        if not oregon.processEvent(self.db, data):
+          print "Unhandled event: " + data.encode('hex')
+
 parser = argparse.ArgumentParser(description="Oregon Scientific via RFXCOM - Keeping track of the weather", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--logfile', metavar="FILE", help="Log to file instead of stdout")
 parser.add_argument('--database', metavar="DATABASE", default="oregon.db", help="Where to store data")
-parser.add_argument('--port', metavar="port", default="/dev/ttyUSB0", help="Which serialport to read sensor data from")
+parser.add_argument('--serial', metavar="serial", default="/dev/ttyUSB0", help="Which serialport to read sensor data from")
+parser.add_argument('--port', default=8070, type=int, help="Port to listen on")
+parser.add_argument('--listen', metavar="ADDRESS", default="0.0.0.0", help="Address to listen on")
 cmdline = parser.parse_args()
 
 db = sqlite3.connect(cmdline.database)
@@ -139,35 +202,30 @@ db.execute('''CREATE TABLE IF NOT EXISTS UV_DATA
     SIGNAL      INT   NOT NULL,
     BATTERY     INT   NOT NULL);''')
 
-# configure the serial connections (the parameters differs on the device you are connecting to)
-ser = serial.Serial(
-  port='/dev/ttyUSB0',
-  baudrate=38400,
-  parity=serial.PARITY_NONE,
-  stopbits=serial.STOPBITS_ONE,
-  bytesize=serial.EIGHTBITS,
-  timeout=1,
-)
+rfxcom = rfxcomMonitor(cmdline.serial, cmdline.database)
+rfxcom.start()
 
-oregon = Oregon()
+# Create the REST interface
+app = Flask(__name__)
 
-ser.isOpen()
+@app.route('/sensors', defaults={"type": None})
+@app.route('/sensors/<type>')
+def api_sensors(type):
+  db = sqlite3.connect(cmdline.database)
+  sql = '''SELECT * FROM SENSORS'''
+  if type is not None:
+    sql += ''' WHERE type = %d''' % int(type)
 
-# Try reading a packet
-while True:
-  while True:
-    size = ser.read(1)
-    if len(size) == 1:
-      break
+  result = db.execute(sql)
+  msg = {}
+  for entry in result:
+    msg[entry[0]] = {"type":entry[1], "name":entry[2]}
+  json = jsonify(msg)
+  json.status_code = 200
+  db.close()
+  return json
 
-  size = int(size.encode('hex'), 16)
-  if size == 0:
-    continue
 
-  #print ("%02d bytes:" % size),
-  data = ser.read(size)
-  if len(data) != size:
-    print "Fail, got %d bytes, expected %d!" % (len(data), size)
-  else:
-    if not oregon.processEvent(db, data):
-      print "Unhandled event: " + data.encode('hex') 
+if __name__ == "__main__":
+  app.debug = True
+  app.run(host=cmdline.listen, port=cmdline.port)
