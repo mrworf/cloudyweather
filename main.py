@@ -12,9 +12,15 @@ from struct import unpack
 from flask import Flask, jsonify, abort
 
 class Oregon:
-  def __init__(self):
+  def __init__(self, dbfile):
     self.lastEntry = {}
+    self.db = sqlite3.connect(dbfile)
+
+    sql = '''SELECT * FROM SENSORS'''
+    result = self.db.execute(sql)
     self.sensors = {}
+    for entry in result:
+      self.sensors[entry[0]] = {"type":entry[1]}
 
   def processTempHumid(self, data):
     # Temp, Humidity, Flags, Battery & Signal
@@ -67,9 +73,11 @@ class Oregon:
       "data" : { "wind" : wind, "average" : avg, "speed" : speed, "signal" : signal, "battery" : battery}
     }
 
-  def getSensors(self):
+  def getSensors(self, type=None):
     result = []
     for s in self.sensors:
+      if type is not None and self.sensors[s]['type'] != int(type):
+        continue
       result.append(s)
     return result
 
@@ -78,10 +86,11 @@ class Oregon:
       return self.sensors[sensor]
     return {}
 
-  def processEvent(self, db, data):
+  def processEvent(self, data):
     stype = ord(data[0])
     subtype = ord(data[1])
     sensor = ord(data[3]) << 8 | ord(data[4])
+    index = str(sensor)
     name = "Sensor 0x%02x.%d" % (ord(data[3]), ord(data[4]))
     data = data[5:]
 
@@ -90,8 +99,8 @@ class Oregon:
 
     # Store this in the database for prosperity
     try:
-      db.execute(statement)
-      db.commit()
+      self.db.execute(statement)
+      self.db.commit()
     except sqlite3.OperationalError as e:
       print e
 
@@ -109,20 +118,23 @@ class Oregon:
 
     if result is None:
       return False
+    result['data']['type'] = stype
 
     print "(%3d:%5d) %s" % (stype, sensor, result["log"])
-    content = repr(result)
+    content = repr(data)
 
-    if sensor in self.lastEntry and self.lastEntry[sensor] == content:
+    if index in self.lastEntry and self.lastEntry[index] == content:
       return True
 
-    self.lastEntry[sensor] = content
-    self.sensors[sensor] = result['data']
+    self.lastEntry[index] = content
+    self.sensors[index] = result['data']
+    print "Sensors:"
+    print repr(self.sensors)
 
     try:
       statement = 'INSERT INTO %s (TS,SENSOR,%s) VALUES (%d,%d,%s)' % (result["table"], result["fields"], int(time.time()), sensor, result["values"])
-      db.execute(statement)
-      db.commit()
+      self.db.execute(statement)
+      self.db.commit()
     except sqlite3.OperationalError as e:
       print e
     return True
@@ -134,10 +146,13 @@ class rfxcomMonitor(threading.Thread):
     self.port = port
     self.dbfile = dbfile
 
-  def run(self):
-    # Open DB in the correct context
-    self.db = sqlite3.connect(self.dbfile)
+  def getSensors(self, type=None):
+    return self.oregon.getSensors(type)
 
+  def getSensor(self, id):
+    return self.oregon.getSensor(id)
+
+  def run(self):
     # configure the serial connections (the parameters differs on the device you are connecting to)
     ser = serial.Serial(
       port=self.port,
@@ -149,7 +164,7 @@ class rfxcomMonitor(threading.Thread):
     )
 
     ser.isOpen()
-    oregon = Oregon()
+    self.oregon = Oregon(self.dbfile)
 
     # Try reading a packet
     while True:
@@ -167,7 +182,7 @@ class rfxcomMonitor(threading.Thread):
       if len(data) != size:
         print "Fail, got %d bytes, expected %d!" % (len(data), size)
       else:
-        if not oregon.processEvent(self.db, data):
+        if not self.oregon.processEvent(data):
           print "Unhandled event: " + data.encode('hex')
 
 parser = argparse.ArgumentParser(description="Oregon Scientific via RFXCOM - Keeping track of the weather", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -211,21 +226,18 @@ app = Flask(__name__)
 @app.route('/sensors', defaults={"type": None})
 @app.route('/sensors/<type>')
 def api_sensors(type):
-  db = sqlite3.connect(cmdline.database)
-  sql = '''SELECT * FROM SENSORS'''
-  if type is not None:
-    sql += ''' WHERE type = %d''' % int(type)
-
-  result = db.execute(sql)
-  msg = {}
-  for entry in result:
-    msg[entry[0]] = {"type":entry[1], "name":entry[2]}
+  msg = {"sensors": rfxcom.getSensors(type) }
   json = jsonify(msg)
   json.status_code = 200
-  db.close()
   return json
 
+@app.route('/sensor/<id>')
+def api_sensor(id):
+  msg = rfxcom.getSensor(id)
+  json = jsonify(msg)
+  json.status_code = 200
+  return json
 
 if __name__ == "__main__":
-  app.debug = True
+  app.debug = False
   app.run(host=cmdline.listen, port=cmdline.port)
