@@ -21,6 +21,7 @@ from array import array
 from struct import unpack
 
 from flask import Flask, jsonify, abort, request
+from flask_cors import CORS, cross_origin
 
 class Oregon:
   def __init__(self, dbfile):
@@ -338,6 +339,7 @@ rfxcom.start()
 
 # Create the REST interface
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 @app.route('/sensors', defaults={"type": None})
 @app.route('/sensors/<type>')
