@@ -23,7 +23,7 @@ from struct import unpack
 from flask import Flask, jsonify, abort, request
 from flask_cors import CORS, cross_origin
 
-class Oregon:
+class CloudySensor:
   def __init__(self, dbfile):
     self.dbfile = dbfile
     self.db = sqlite3.connect(self.dbfile)
@@ -244,8 +244,8 @@ class rfxcomMonitor(threading.Thread):
     self.port = port
     self.dbfile = dbfile
 
-  def getOregon(self):
-    return self.oregon
+  def getCloudy(self):
+    return self.cloudy
 
   def run(self):
     # configure the serial connections (the parameters differs on the device you are connecting to)
@@ -259,7 +259,7 @@ class rfxcomMonitor(threading.Thread):
     )
 
     ser.isOpen()
-    self.oregon = Oregon(self.dbfile)
+    self.cloudy = CloudySensor(self.dbfile)
 
     # Try reading a packet
     while True:
@@ -277,12 +277,12 @@ class rfxcomMonitor(threading.Thread):
       if len(data) != size:
         print "Fail, got %d bytes, expected %d!" % (len(data), size)
       else:
-        if not self.oregon.processEvent(data):
+        if not self.cloudy.processEvent(data):
           print "Unhandled event: " + data.encode('hex')
 
-parser = argparse.ArgumentParser(description="Oregon Scientific via RFXCOM - Keeping track of the weather", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+parser = argparse.ArgumentParser(description="Cloudy Weather - An RFXCOM based weather station", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--logfile', metavar="FILE", help="Log to file instead of stdout")
-parser.add_argument('--database', metavar="DATABASE", default="oregon.db", help="Where to store data")
+parser.add_argument('--database', metavar="DATABASE", default="cloudy.db", help="Where to store data")
 parser.add_argument('--serial', metavar="serial", default="/dev/ttyUSB0", help="Which serialport to read sensor data from")
 parser.add_argument('--port', default=8070, type=int, help="Port to listen on")
 parser.add_argument('--listen', metavar="ADDRESS", default="0.0.0.0", help="Address to listen on")
@@ -344,14 +344,14 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 @app.route('/sensors', defaults={"type": None})
 @app.route('/sensors/<type>')
 def api_sensors(type):
-  msg = rfxcom.getOregon().getSensors(type)
+  msg = rfxcom.getCloudy().getSensors(type)
   json = jsonify(msg)
   json.status_code = 200
   return json
 
 @app.route('/sensor/<id>')
 def api_sensor(id):
-  msg = rfxcom.getOregon().getSensor(id)
+  msg = rfxcom.getCloudy().getSensor(id)
   json = jsonify(msg)
   json.status_code = 200
   return json
@@ -367,8 +367,8 @@ def api_sensorUpdate():
     print "Name is none"
     return
 
-  rfxcom.getOregon().setSensorName(id, name)
-  msg = rfxcom.getOregon().getSensor(id)
+  rfxcom.getCloudy().setSensorName(id, name)
+  msg = rfxcom.getCloudy().getSensor(id)
   json = jsonify(msg)
   json.status_code = 200
   return json
