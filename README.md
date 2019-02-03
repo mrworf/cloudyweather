@@ -1,62 +1,37 @@
-Cloudy Weather
-==============
+# RFXCOM MQTT Bridge
 
-An RFXCOM based weather station which is very much a work-in-progress
-(formerly called rfxcom). It will use an rfxcom USB receiver to register
-all found temperature, humidity, rain and wind sensors to a local database.
+This service uses the rfxcom USB device to gather input from all kinds of
+Oregon Scientific sensors (wind, rain, temperature, etc.) and then publishes
+it using the mqtt protocol.
 
-All stored data is available through a REST interface, but current
-implementation only exposes latest values.
-
-Installing
-==========
+# Installing
 
 The service has the following dependencies:
 
 - pip
-- flask
 - pyserial
+- paho-mqtt
 
 And of course, it needs a RFXCOM interface attached via USB
 
 The following instructions assumes you're running a ubuntu/debian flavor:
 
 ```
-sudo apt-get install python-pip
-sudo apt-get install python-dev
-sudo pip install flask
-sudo pip install flask-cors
+sudo apt-get install python-pip python-dev python-paho-mqtt
 sudo pip install pyserial
 ```
 
-Running it
-==========
+# Running it
 
-In almost all cases, simply running the main.py from commandline will be
-sufficient, but if you need to, you can specify both serial port 
-(default /dev/ttyUSB0) and database (default cloudy.db)
+First, configure the `sensors.conf` file to accurately reflect your setup. 
+To find out what sensors the rfxcom device can see, use the `--detect` option
 
-Accessing it
-============
+Next run the tool and it will publish any and all data via MQTT topics to your
+selected broker
 
-It serves up a REST interface on port 8070 where you can get the following
-data:
+# What happened the old software?
 
-```
-/sensors/
-```
+It was poorly maintained and worked so-so. Learning about MQTT and what it is used
+for made it very to see that I should change direction.
 
-Returns a list of all sensors
-
-```
-/sensors/<type>/
-```
-
-Returns a list of sensors which are of <type>
-
-```
-/sensor/<id>
-```
-
-Returns the latest status of the sensor <id>
 
