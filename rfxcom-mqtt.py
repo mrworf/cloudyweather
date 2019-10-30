@@ -199,11 +199,11 @@ class CloudySensor:
     return {}
 
   def processEvent(self, data):
-    stype = ord(data[0])
-    subtype = ord(data[1])
-    sensor = ord(data[3]) << 8 | ord(data[4])
-    sensor_major = ord(data[3])
-    sensor_minor = ord(data[4])
+    stype = data[0]
+    subtype = data[1]
+    sensor = data[3] << 8 | data[4]
+    sensor_major = data[3]
+    sensor_minor = data[4]
     index = str(sensor)
     data = data[5:]
 
@@ -289,7 +289,7 @@ class rfxcomMonitor(threading.Thread):
       if self.detect and time.time() > (started + 60):
         break
 
-      size = int(size.encode('hex'), 16)
+      size = int(size.hex(), 16)
       if size == 0:
         continue
 
@@ -321,12 +321,23 @@ class rfxcomMonitor(threading.Thread):
 
 parser = argparse.ArgumentParser(description="Cloudy Weather - An RFXCOM based weather station", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--logfile', metavar="FILE", help="Log to file instead of stdout")
+parser.add_argument('--debug', action='store_true', help="Provide additional messages")
 parser.add_argument('--serial', metavar="serial", default="/dev/ttyUSB0", help="Which serialport to read sensor data from")
 parser.add_argument('--detect', action='store_true', help='Run for 60s and show all detected sensors, will not report to MQTT broker')
 parser.add_argument('--mqtt', help='MQTT Broker to publish topics')
-parser.add_argument('--config', help="Which config to read", default="sensor.conf")
-
+parser.add_argument('--config', help="Which config to read", default="sensors.conf")
 cmdline = parser.parse_args()
+
+logging.getLogger('').handlers = []
+loglevel=logging.INFO
+logformat=u'%(levelname)s - %(message)s'
+if cmdline.debug:
+  loglevel=logging.DEBUG
+if cmdline.logfile:
+  logformat=u'%(asctime)s - %(levelname)s - %(message)s'
+  logging.basicConfig(filename=cmdline.logfile, level=loglevel, format=logformat)
+else:
+  logging.basicConfig(stream=sys.stdout, level=loglevel, format=logformat)
 
 if not os.path.exists(cmdline.serial):
   logging.error('Specified serial port does not exist: %s', cmdline.serial)
