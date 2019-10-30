@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #
 # For help with decoding messages from RFXCOM, please see the OpenHAB project,
 # specifically:
@@ -16,16 +16,19 @@ import threading
 import argparse
 import datetime
 import traceback
+import logging
 import re
+import os
+
 from array import array
 from struct import unpack
 
 import paho.mqtt.client as mqtt
 
 class SensorMapping:
-  def __init__(self):
+  def __init__(self, filename):
     self.sensorMap = {}
-    self.loadConfig()
+    self.loadConfig(filename)
 
   def getMapping(self, sensorId, sensorChannel):
     sensor = '%d.%d' % (sensorId, sensorChannel)
@@ -40,15 +43,21 @@ class SensorMapping:
       if key in data:
         value = data[key]
       else:
-        print('Warning: Invalid key "%s"' % key)
+        logging.warning('Invalid key "%s"' % key)
         return None, None
       topic = topic.replace('{%s}' % key, str(value))
     # Finally, split the topic into key/value
     return topic.split(':')
 
-  def loadConfig(self):
+  def loadConfig(self, filename):
     current = None
-    with open('sensors.conf', 'r') as file:
+    if filename is None:
+      return
+    if not os.path.exists(filename):
+      logging.warning('Sensor config doesn\'t exists, tried loading %s', filename)
+      return
+
+    with open(filename, 'r') as file:
       lc = 0
       for oline in file:
         lc += 1
@@ -60,12 +69,12 @@ class SensorMapping:
         else:
           topic = False
         if topic and current is None:
-          print('Warning: Line %d, topic defined without sensor, ignored' % lc)
+          logging.warning('Line %d, topic defined without sensor, ignored' % lc)
           continue
         if not topic:
           parts = line.split()
           if len(parts) != 4:
-            print('Warning: Line %d, sensor definition line is incorrect' % lc)
+            logging.warning('Line %d, sensor definition line is incorrect' % lc)
             continue
           sensor = "%s.%s" % (parts[1], parts[3])
           current = sensor
@@ -73,11 +82,6 @@ class SensorMapping:
             self.sensorMap[current] = []
         else:
           self.sensorMap[current].append(line)
-#    print('Sensor configuration loaded:')
-#    for sensor in self.sensorMap:
-#      print('Sensor %s:' % sensor)
-#      for item in self.sensorMap[sensor]:
-#        print('  %s' % item)
 
 class CloudySensor:
   def __init__(self):
@@ -149,7 +153,7 @@ class CloudySensor:
     # direction, avg speed, speed
 
     if len(data) != 11:
-      print "ERROR: Do not support this kind of wind sensor"
+      logging.error("Do not support this kind of wind sensor")
       return None
 
     (wind_hi, wind_lo, avg_hi, avg_lo, speed_hi, speed_lo, temp_hi, temp_lo, chill_hi, chill_lo, sigbat) = unpack(">BBBBBBBBBBB", data)
@@ -227,11 +231,10 @@ class CloudySensor:
         result['type'] = 'rain'
         result['data'] = self.processRain(data)
       else:
-        print "Warning: Type %d is unsupported" % stype
+        logging.warning("Type %d is unsupported" % stype)
         return None
     except:
-      print "Decoder failed on: %d:%s" % (stype, data.encode('hex'))
-      traceback.print_exc()
+      logging.exception("Decoder failed on: %d:%s" % (stype, data.encode('hex')))
       return None
 
     # Don't bother with the remaining steps if data didn't change
@@ -242,12 +245,13 @@ class CloudySensor:
     return result
 
 class rfxcomMonitor(threading.Thread):
-  def __init__(self, port, detect=False):
+  def __init__(self, port, config=None, detect=False):
     threading.Thread.__init__(self)
     self.daemon = True
     self.port = port
     self.detect = detect
     self.mqtt = None
+    self.config = config
 
   def start(self, mqtt):
     self.mqtt = mqtt
@@ -266,14 +270,14 @@ class rfxcomMonitor(threading.Thread):
 
     ser.isOpen()
     self.cloudy = CloudySensor()
-    self.mapping = SensorMapping()
+    self.mapping = SensorMapping(self.config)
 
     # Keep track of last message so we don't flood the server (topic : value)
     lastActivity = {}
 
     started = time.time()
     if self.detect:
-      print('Running detection for 60s, please be patient...')
+      logging.info('Running detection for 60s, please be patient...')
 
     while True:
       while True:
@@ -291,7 +295,7 @@ class rfxcomMonitor(threading.Thread):
 
       data = ser.read(size)
       if len(data) != size:
-        print "Fail, got %d bytes, expected %d!" % (len(data), size)
+        logging.error("Fail, got %d bytes, expected %d!" % (len(data), size))
       else:
         result = self.cloudy.processEvent(data)
         if result is not None and not self.detect:
@@ -303,33 +307,42 @@ class rfxcomMonitor(threading.Thread):
             if topic in lastActivity and lastActivity[topic] == value:
               continue
             lastActivity[topic] = value
-            print('Publish %s to %s' % (value, topic))
+            logging.info('Publish %s to %s' % (value, topic))
             client.publish(topic, value)
 
-    print "All detected sensors (if prefixed with asterisk, it's already in your sensors.conf):"
+    logging.info("All detected sensors (if prefixed with asterisk, it's already in your config):")
     for key in self.cloudy.sensors:
       sensor = self.cloudy.sensors[key]
       if len(self.mapping.getMapping(sensor['sensor.id'], sensor['sensor.channel'])) == 0:
         mapped = ' '
       else:
         mapped = '*'
-      print('%s Channel %2d, Id %4d, Type %s (%s)' % (mapped, sensor['sensor.channel'], sensor['sensor.id'], sensor['type'], repr(sensor['data'])))
+      logging.info('%s Channel %2d, Id %4d, Type %s (%s)' % (mapped, sensor['sensor.channel'], sensor['sensor.id'], sensor['type'], repr(sensor['data'])))
 
 parser = argparse.ArgumentParser(description="Cloudy Weather - An RFXCOM based weather station", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--logfile', metavar="FILE", help="Log to file instead of stdout")
 parser.add_argument('--serial', metavar="serial", default="/dev/ttyUSB0", help="Which serialport to read sensor data from")
 parser.add_argument('--detect', action='store_true', help='Run for 60s and show all detected sensors, will not report to MQTT broker')
-parser.add_argument('mqtt', help='MQTT Broker to publish topics')
+parser.add_argument('--mqtt', help='MQTT Broker to publish topics')
+parser.add_argument('--config', help="Which config to read", default="sensor.conf")
 
 cmdline = parser.parse_args()
-rfxcom = rfxcomMonitor(cmdline.serial, detect=cmdline.detect)
+
+if not os.path.exists(cmdline.serial):
+  logging.error('Specified serial port does not exist: %s', cmdline.serial)
+  sys.exit(255)
 
 if cmdline.detect:
+  rfxcom = rfxcomMonitor(cmdline.serial, detect=cmdline.detect)
   rfxcom.run()
-else:
+elif cmdline.config and cmdline.mqtt:
+  rfxcom = rfxcomMonitor(cmdline.serial, cmdline.config, detect=cmdline.detect)
   client = mqtt.Client()
   #client.on_connect = on_connect
   #client.on_message = on_message
   client.connect(cmdline.mqtt, 1883, 60)
   rfxcom.start(client)
   client.loop_forever()
+else:
+  logging.info('You need to either run in --detect mode or provide mqtt and config file')
+
