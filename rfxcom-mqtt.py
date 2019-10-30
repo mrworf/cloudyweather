@@ -245,13 +245,14 @@ class CloudySensor:
     return result
 
 class rfxcomMonitor(threading.Thread):
-  def __init__(self, port, config=None, detect=False):
+  def __init__(self, port, config=None, detect=False, duration=60):
     threading.Thread.__init__(self)
     self.daemon = True
     self.port = port
     self.detect = detect
     self.mqtt = None
     self.config = config
+    self.duration = duration
 
   def start(self, mqtt):
     self.mqtt = mqtt
@@ -277,16 +278,16 @@ class rfxcomMonitor(threading.Thread):
 
     started = time.time()
     if self.detect:
-      logging.info('Running detection for 60s, please be patient...')
+      logging.info('Running detection for %ds, please be patient...', self.duration)
 
     while True:
       while True:
-        if self.detect and time.time() > (started + 60):
+        if self.detect and time.time() > (started + self.duration):
           break
         size = ser.read(1)
         if len(size) == 1:
           break
-      if self.detect and time.time() > (started + 60):
+      if self.detect and time.time() > (started + self.duration):
         break
 
       size = int(size.hex(), 16)
@@ -324,6 +325,7 @@ parser.add_argument('--logfile', metavar="FILE", help="Log to file instead of st
 parser.add_argument('--debug', action='store_true', help="Provide additional messages")
 parser.add_argument('--serial', metavar="serial", default="/dev/ttyUSB0", help="Which serialport to read sensor data from")
 parser.add_argument('--detect', action='store_true', help='Run for 60s and show all detected sensors, will not report to MQTT broker')
+parser.add_argument('--duration', help='Set the number of seconds to run detection', default=60, type=int)
 parser.add_argument('--mqtt', help='MQTT Broker to publish topics')
 parser.add_argument('--config', help="Which config to read", default="sensors.conf")
 cmdline = parser.parse_args()
@@ -344,13 +346,15 @@ if not os.path.exists(cmdline.serial):
   sys.exit(255)
 
 if cmdline.detect:
-  rfxcom = rfxcomMonitor(cmdline.serial, detect=cmdline.detect)
+  config = None
+  if os.path.exists(cmdline.config):
+    config = cmdline.config
+
+  rfxcom = rfxcomMonitor(cmdline.serial, detect=cmdline.detect, duration=cmdline.duration, config=config)
   rfxcom.run()
 elif cmdline.config and cmdline.mqtt:
   rfxcom = rfxcomMonitor(cmdline.serial, cmdline.config, detect=cmdline.detect)
   client = mqtt.Client()
-  #client.on_connect = on_connect
-  #client.on_message = on_message
   client.connect(cmdline.mqtt, 1883, 60)
   rfxcom.start(client)
   client.loop_forever()
