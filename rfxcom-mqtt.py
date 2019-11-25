@@ -14,13 +14,10 @@ import time
 import serial
 import threading
 import argparse
-import datetime
-import traceback
 import logging
 import re
 import os
 
-from array import array
 from struct import unpack
 
 import paho.mqtt.client as mqtt
@@ -240,6 +237,9 @@ class CloudySensor:
     # Don't bother with the remaining steps if data didn't change
     if index in self.sensors and repr(self.sensors[index]) == repr(result):
       return None
+
+    if index not in self.sensors:
+      logging.info('Found sensor at channel %2d, id %4d, type %s (data: %d)', result['sensor.channel'], result['sensor.id'], result['type'], repr(result['data']))
 
     self.sensors[index] = result
     return result
