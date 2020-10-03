@@ -8,7 +8,6 @@ it using the mqtt protocol.
 
 The service has the following dependencies:
 
-- pip
 - pyserial
 - paho-mqtt
 
@@ -17,8 +16,7 @@ And of course, it needs a RFXCOM interface attached via USB
 The following instructions assumes you're running a ubuntu/debian flavor:
 
 ```
-sudo apt-get install python-pip python-dev python-paho-mqtt
-sudo pip install pyserial
+sudo apt-get install python3-paho-mqtt python3-serial
 ```
 
 # Running it

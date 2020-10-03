@@ -239,7 +239,7 @@ class CloudySensor:
       return None
 
     if index not in self.sensors:
-      logging.info('Found sensor at channel %2d, id %4d, type %s (data: %d)', result['sensor.channel'], result['sensor.id'], result['type'], repr(result['data']))
+      logging.info('Found sensor at channel %2d, id %4d, type %s (data: %s)', result['sensor.channel'], result['sensor.id'], result['type'], repr(result['data']))
 
     self.sensors[index] = result
     return result
